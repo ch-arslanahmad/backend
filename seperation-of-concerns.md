@@ -62,3 +62,7 @@ Or we could divide it into different modules based on the features, for example:
 Now inside the module we can further separate the concerns into different files, for example:
 - Inside `src/classes`, each entity (`User.ts`, `Job.ts`, `Application.ts`) has its own file.
 - Inside `src/routes`, each resource (`auth.ts`, `jobs.ts`, `applications.ts`, `savedJobs.ts`) has its own file.
+
+> [!caution]
+> When separating concerns, it's important to ensure that each module or file has a single, well-defined responsibility. This helps to avoid tight coupling and makes the code easier to maintain and test.
+> It is to also important to only use it when necessary, as over-separation can lead to unnecessary complexity and make the code harder to understand.
