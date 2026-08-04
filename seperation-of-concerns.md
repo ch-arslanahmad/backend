@@ -1,6 +1,6 @@
 # Separation of Concerns
 
-Separation of concerns is a software design principle used when building, designing applications, systems, etc.
+Separation of concerns is a software design principle used when building and designing applications and systems.
 
 It states that each part of a program is responsible for only one concern or responsibility.
 
@@ -64,5 +64,4 @@ Now inside the module we can further separate the concerns into different files,
 - Inside `src/routes`, each resource (`auth.ts`, `jobs.ts`, `applications.ts`, `savedJobs.ts`) has its own file.
 
 > [!caution]
-> When separating concerns, it's important to ensure that each module or file has a single, well-defined responsibility. This helps to avoid tight coupling and makes the code easier to maintain and test.
-> It is to also important to only use it when necessary, as over-separation can lead to unnecessary complexity and make the code harder to understand.
+> Even though separation of concerns is good practice, it is also important to only use it when necessary. Over-separation can lead to unnecessary complexity and make the code harder to understand. It is important to find a balance between separation and simplicity.
