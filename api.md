@@ -18,13 +18,34 @@ The format for API request & response is mostly JSON.
 
 ## HTTP Methods
 
-| Method | Use                          |
-| ------ | ---------------------------- |
-| GET    | Retrieve data                |
-| POST   | Send data                    |
-| PUT    | Update existing data         |
-| PATCH  | Update partially (one field) |
-| DELETE | Delete data                  |
+| Method  | Use                                                   |
+| ------- | ----------------------------------------------------- |
+| GET     | Retrieve data                                         |
+| POST    | Send data                                             |
+| PUT     | Update existing data                                  |
+| PATCH   | Update partially (one field)                          |
+| DELETE  | Delete data                                           |
+| OPTIONS | Ask which methods a URL supports (no body, no change) |
+
+### OPTIONS
+
+This request asks the server what methods are allowed on a given URL. The server responds with an `Allow` header listing the supported methods. This is often used in CORS preflight requests to check permissions before making the actual request.
+
+For example,
+
+```bash
+curl -i -X OPTIONS http://localhost:3000/api/events
+HTTP/1.1 200 OK
+Allow: GET, POST, OPTIONS
+Content-Length: 0
+
+```
+
+The list comes from the routes that exist, not from a permission grant. Spring MVC generates it for any mapped path; no handler needed. Safe and idempotent: no data, no side effect.
+
+**CORS preflight.** Before a cross-origin request (different origin/port), the browser sends the OPTIONS itself, with `Origin` + `Access-Control-Request-Method`; server answers `Access-Control-Allow-*`. That preflight **never carries cookies**, so demanding auth on it only breaks the requests it exists to enable: a `401` here blocks the real request before it is sent. Fix: run CORS before auth (`http.cors(...)` in Spring Security), or permit preflights only in the security config.
+
+Same-origin prod (nginx serves SPA and proxies `/api`) = no CORS = no preflight. Dev origin split (`:5173` → `:8080`) is where it shows up.
 
 ## Status Codes
 
