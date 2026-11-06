@@ -6,7 +6,7 @@ As we know JSON is a universally used format to transfer data.
 
 While JWT is signed token provided by a server with a secret key.
 
-Without the secret key, anyone can forge a JWT.
+Only the holder of the signing key (the server's secret, or its private key) can produce a JWT that verifies. Without it, any forgery fails at verification.
 
 The server holds the SECRET key & produces the JWT. Client only stores and sends it.
 
@@ -16,10 +16,9 @@ A JWT contains three things:
 - the second is the payload (the main content),
 - the third is the signature.
 
-Hence called self-contained as it holds token (signature) for authentication and payload for actual content.
-It acts as a self-contained state-less authentication.
+Hence called self-contained: the claims, the identity, travel inside the token, so the server needs no session lookup. The signature adds no data of its own, it only proves the claims were not altered.
 
-This is only received after he is authenticated or logged in or signed up.
+A JWT is a credential, a signed container of claims; the application decides how to use it.
 
 Keep in mind you make it a requirement for most authorized requests to include a token. While some are subject to exceptions like login/signup etc.
 
