@@ -136,6 +136,9 @@ The actual flow,
    Server: Processes request
 ```
 
+> [!note]
+> Due to JWT being self-contained, you cannot revoke a JWT before it expires. If you need to revoke a token, you must either wait it to expire or implement a revocation list on the server side, which requires state and affects the statelessness of the system.
+
 ## Caution
 
 The JWT **is** the credential the API trusts. Whoever holds it can make requests as that user.
