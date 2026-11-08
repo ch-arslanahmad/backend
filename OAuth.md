@@ -40,7 +40,7 @@ The tokens can be of different types, but the most common are:
 
 The access token is usually a [**JWT**](JWT.md) (JSON Web Token), they are self-contained, cheap to verify and distribute, but can't be revoked before they expire.
 
-Alternatively, the access token can be an opaque token, which is a random string (e.g., a UUID) that has no meaning outside the authorization server. The resource server must check with the authorization server to validate it, requires a database lookup, and is more expensive to verify, but can be revoked at any time, sessions use opaque tokens for this reason.
+Alternatively, the access or refresh token can be an opaque token, which is a random string (e.g., a UUID) that has no meaning outside the authorization server. The resource server must check with the authorization server to validate it, requires a database lookup, and is more expensive to verify, but can be revoked at any time, sessions use opaque tokens for this reason.
 
 ### ID Token
 
@@ -61,3 +61,74 @@ The ID token is a special token to authenticate the user. It is issued by the au
 > - JWTs are more efficient for verification but cannot be revoked
 > - opaque tokens can be revoked but require additional server-side logic.
 >   They may be used together, with the access token being a JWT and the refresh token being opaque.
+
+## Client Types
+
+There are two kinds of OAuth clients, split by whether they can keep a secret.
+
+1. **Confidential Client**: can securely store a secret (e.g., server-side applications). It uses the `client_secret` to authenticate itself to the authorization server.
+2. **Public Client**: cannot securely store a secret (e.g., mobile apps, single-page applications). It has no `client_secret` and must rely on PKCE for security.
+
+Providers require PKCE for public clients. It may also be used with confidential clients, and using it everywhere is the recommended approach.
+
+## Flow: Authorization Code + PKCE
+
+This is the most common flow for web and mobile applications.
+
+It involves the following steps:
+
+<img alt="Authorization Code + PKCE Flow" src="https://developers.google.com/static/identity/images/branding_guide_android_web_spec.png" width="300">
+
+1. The **client** redirects the user to the _authorization server’s authorization endpoint_, sending a PKCE code challenge plus other params (client ID, redirect URI, scopes, etc.).
+
+2. _User authenticates_ & _consents at the auth server_, the user grants access to the client.
+
+<img alt="account-chooser-and-consent" src="https://uploads.strapi.logto.io/customize_google_prompt_59a998bf66.png">
+
+3. The **authorization server** redirects the _user_ back to the client with an authorization_code.
+4. The **client** posts the `authorization_code` and `code_verifier` to the auth server’s token endpoint.
+5. The **auth server** validates the _code_ and verifier, then issues an access_token (and optionally a refresh_token) to the client.
+
+If already logged in Google, there may be implicit or explicit consent, so the user is not prompted to log in or consent again.
+
+<img src="https://developers.google.com/static/identity/gsi/web/images/one-tap-ui-fedcm.png" width="400">
+
+<img src="https://developers.google.com/static/identity/gsi/web/images/auto-sign-in-fedcm.png" width="400">
+
+Hence why it only asks once and then doesnt ask everytime user logs in. The user can revoke access at any time from their Google account settings.
+
+> PKCE (`code_challenge`, `code_verifier`) is explained under [Grants](#1-authorization-code-grant-with-pkce).
+
+## Grants
+
+Access tokens exist to allow the clients to access resources or do operations on behalf of the resource owner, while a new access token is provided by the refresh token after it expires.
+
+The way the client obtains an access token is called a **grant**,
+
+The most common grant types are:
+
+### 1. **Authorization Code Grant** (with PKCE)
+
+This is the way Google, GitHub, and other OAuth providers recommend for web and mobile apps. It is the most secure way to obtain an access token.
+
+#### PKCE (Proof Key for Code Exchange)
+
+PKCE is an extension of the Authorization Code flow. It stops a stolen authorization code from being exchanged for a token: the client sends a hashed `code_challenge` up front, then proves that it still holds the original `code_verifier` when it redeems the code. The verifier never appears in the browser redirect.
+
+The real issue is that the `client_secret` is static and reusable. It’s the same value for every login, for as long as it’s valid. If it leaks once, the attacker can use it again and again until someone notices and rotates it. Any stolen code paired with it works.
+
+#### With and without PKCE
+
+Both versions follow the same sequence. They differ only in setup and in the token request.
+
+| Step                            | Confidential, no PKCE                                                                                                                                 | Confidential + PKCE                                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1. Setup                        | Client holds a long-lived `client_secret` in its config                                                                                               | Same, plus client generates a random `code_verifier` in memory and computes `code_challenge = SHA256(code_verifier)` |
+| 2. Authorization request        | Client redirects user to auth server with `client_id`, `redirect_uri`, `response_type=code`                                                           | Same, plus `code_challenge` and `code_challenge_method=S256`                                                         |
+| 3. Login                        | User logs in and consents. Auth server issues a `code`                                                                                                | Same, plus auth server records `code_challenge` against that `code`. Only the `code` is returned to the client       |
+| 4. Redirect (front channel)     | Auth server redirects browser to `redirect_uri?code=...`. The code is visible in the browser and may appear in logs                                   | Same. The verifier is never sent here                                                                                |
+| 5. Token request (back channel) | Client sends `code`, `client_id`, `client_secret`, `redirect_uri`                                                                                     | Same, plus `code_verifier`                                                                                           |
+| 6. Verification                 | Auth server checks the code is valid, unused, and unexpired, that it belongs to this `client_id` and `redirect_uri`, and that `client_secret` matches | Same checks, plus auth server hashes `code_verifier` and compares it to the stored `code_challenge`                  |
+| 7. Result                       | Tokens issued if all checks pass                                                                                                                      | Tokens issued only if all checks pass, including the challenge match                                                 |
+
+PKCE adds a check on top of the secret; it does not replace it. For a public client there is no secret to add it to, so PKCE is the only proof that the token request came from the client that started the login.
