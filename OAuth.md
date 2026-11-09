@@ -72,12 +72,12 @@ The access token is usually a [**JWT**](JWT.md) (JSON Web Token), they are self-
 
 Alternatively, the access or refresh token can be an opaque token, which is a random string (e.g., a UUID) that has no meaning outside the authorization server. The resource server must check with the authorization server to validate it, requires a database lookup, and is more expensive to verify, but can be revoked at any time, sessions use opaque tokens for this reason.
 
-### ID Token
+### ID Token (OIDC)
 
-The ID token is a special token to authenticate the user. It is issued by the authorization server and must carry identity claims (`sub`, email, name, etc.).
+The ID token is an OpenID Connect (OIDC) extension on top of OAuth 2.0 to authenticate the user. It is issued by the authorization server as a signed JWT and carries identity claims (`sub`, email, name, etc.).
 
 - Client verifies it to know the user's identity, then uses the access token to act on their behalf.
-- It is usually a JWT; an opaque ID token is possible.
+- Unlike access tokens (which can be opaque), an ID token is always a JWT.
 
 ### Sending the Access Token
 
@@ -125,7 +125,7 @@ If already logged in Google, there may be implicit or explicit consent, so the u
 
 <img src="https://developers.google.com/static/identity/gsi/web/images/auto-sign-in-fedcm.png" width="400">
 
-Hence why it only asks once and then doesnt ask everytime user logs in. The user can revoke access at any time from their Google account settings.
+Hence why it only asks once and then doesn't ask every time user logs in. The user can revoke access at any time from their Google account settings.
 
 > PKCE (`code_challenge`, `code_verifier`) is explained under [Grants](#1-authorization-code-grant-with-pkce).
 
@@ -161,7 +161,7 @@ Callback adds statefulness to the flow.
 
 Access tokens exist to allow the clients to access resources or do operations on behalf of the resource owner, while a new access token is provided by the refresh token after it expires.
 
-The way the client obtains an access token is called a **grant**,
+The way the client obtains an access token is called a **grant**.
 
 The most common grant types are:
 
@@ -190,3 +190,66 @@ Both versions follow the same sequence. They differ only in setup and in the tok
 | 7. Result                       | Tokens issued if all checks pass                                                                                                                      | Tokens issued only if all checks pass, including the challenge match                                                 |
 
 PKCE adds a check on top of the secret; it does not replace it. For a public client there is no secret to add it to, so PKCE is the only proof that the token request came from the client that started the login.
+
+### 2. Implicit Grant (deprecated)
+
+The access token is returned directly in the front‑channel redirect (the URL fragment or query string). No separate token request step.
+
+For example,
+
+```
+GET https://auth.example.com/authorize
+    ?response_type=token
+    &client_id=...
+    &redirect_uri=https://app.example.com/callback
+    &scope=pods:read
+```
+
+It is deprecated and not used in modern apps due to the security risks of **exposing the access token** in the browser and the lack of refresh tokens. It is recommended to use the Authorization Code Grant with PKCE instead.
+
+### 3. Resource Owner Password Credentials Grant [ROPC] (deprecated)
+
+The client collects the user's credentials (username and password) and sends them to the authorization server to obtain an access token. This flow is not recommended due to security risks, as it requires the client to handle sensitive user credentials directly.
+
+It is no different from a normal login, and the client can impersonate the user. It is only used in legacy applications where other flows are not feasible.
+
+> [!important]
+> The implicit/password are dead in modern apps due to being insecure.
+
+### 4. Client Credentials Grant
+
+The client authenticates itself with its own `client_secret` (or a JWT) and then requests an access token with **no user involved**. The resulting token represents the client, not the user, it can't carry user claims like `email` or `role`. This is what machine-to-machine communication needs.
+
+The authorization in this case is based on the client’s identity and its permissions decided by the authorization server, not on a user’s identity. The access token can be used to access resources or perform operations that are allowed for the client itself.
+
+This is used for server-to-server communication, for example
+
+- An MCP server accesses external APIs without acting on behalf of a user.
+- Backend-for-frontend (BFF) talking to a microservice
+- Backend-to-backend communication (third-party service talking to your API),
+
+For example, a MCP server can do this to get an access token to call a protected API:
+
+```http
+POST /token
+Content-Type: application/x-www-form-urlencoded
+client_id=service-id
+&client_secret=service-secret
+&grant_type=client_credentials
+&scope=pods:read
+```
+
+### Grants Summary
+
+| Grant                      | Has user? | Has Browser?            | How token is handed over  |
+| -------------------------- | --------- | ----------------------- | ------------------------- |
+| Authorization Code (+PKCE) | yes       | yes (redirect to login) | POST `/token` backchannel |
+| Implicit                   | yes       | yes (redirect)          | in URL fragment (leaked)  |
+| Resource Owner Password    | yes       | no                      | POST `/token` with creds  |
+| Client Credentials         | no        | no                      | POST `/token` with secret |
+
+After the authorization code grant, a refresh token lets you mint new access tokens without re-logging in (`grant_type=refresh_token`).
+
+> [!note]
+> Refresh isn’t one of the four ways to get a first token. It comes after one. An initial grant, usually authorization code, gives you an access token and a refresh token. Later, `grant_type=refresh_token` exchanges the refresh token for a new access token, so the session continues without a new login.
+> The spec lists `refresh_token` as a grant type value, which is why it’s called a “refresh grant”. However, it can’t start a session on its own, hence also called **maintenance grant**. It is not a replacement for the four main grants, it is a continuation of one of them.
