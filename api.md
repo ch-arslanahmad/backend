@@ -100,7 +100,15 @@ https://example.com/products/shoes/123?color=red&size=10
 | Path param `{id}` | `/api/students/5`    | Identifies a specific resource |
 | Query `?key=val`  | `/api/students?id=5` | Optional filters/searching     |
 
-Path params for unique resource ID. Query params for optional filters.
+Path params for unique resource ID. Query params for optional filters, also called **query string**.
+
+### GET requests and the query string
+
+In a GET request, there is nothing in the request body by convention (read-only, idempotent), and hence we fit every filter and all the info needed in the query string.
+
+This introduces security risks: query strings are visible in logs and history, so don't put sensitive values there. The query string is the part after `?`, and query parameters are the `key=value` pairs in it.
+
+If we need to send data, we use POST, PUT, or PATCH depending on what the request does.
 
 ---
 
