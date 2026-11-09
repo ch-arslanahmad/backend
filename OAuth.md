@@ -31,6 +31,36 @@ Authorization does not always require authentication. A public resource is autho
 
 The auth server does the authentication. OAuth's main purpose is authorization. The resource server checks the token, not the user.
 
+## Requests and endpoints
+
+OAuth is not a single endpoint. It is a protocol: roles, a few endpoints, and the parameters each one accepts. A login is a sequence of HTTP requests to those endpoints.
+
+The auth server owns the endpoints. The client owns the callback.
+
+| Endpoint                  | Method | Channel          | Purpose                                                    |
+| ------------------------- | ------ | ---------------- | ---------------------------------------------------------- |
+| `/authorize`              | GET    | browser redirect | user logs in and consents, auth server returns a `code`    |
+| `/token`                  | POST   | server-to-server | trade the `code` (+ verifier) for tokens                   |
+| `/revoke` / `/introspect` | POST   | server-to-server | optional: revoke a token, or ask whether it is still valid |
+
+For the general shape of a request (method, URL, headers, body), see [api.md](api.md#anatomy-of-a-request).
+
+Everything after `?` is a parameter, not part of the endpoint:
+
+```http
+GET https://auth.example.com/authorize
+    ?response_type=code
+    &client_id=...
+    &redirect_uri=https://app.example.com/callback
+    &scope=pods:read
+    &state=...
+    &code_challenge=...
+```
+
+`redirect_uri` is a parameter whose value points at an endpoint, but that endpoint is on the client, not the auth server. `state` is just an opaque value, not a URI at all.
+
+`response_type=code` selects the flow, what to send back from auth server to the client i.e., `code`.
+
 ## Tokens
 
 The tokens can be of different types, but the most common are:
@@ -98,6 +128,34 @@ If already logged in Google, there may be implicit or explicit consent, so the u
 Hence why it only asks once and then doesnt ask everytime user logs in. The user can revoke access at any time from their Google account settings.
 
 > PKCE (`code_challenge`, `code_verifier`) is explained under [Grants](#1-authorization-code-grant-with-pkce).
+
+### Callback checks (state + redirect_uri)
+
+The callback is a URL on the client (`redirect_uri`). It is a **new** HTTP request that arrives after an ordinary `302` chain (the same redirect `curl -L` follows), so nothing is in memory when it lands (HTTP is stateless). `state` is the only link back to the flow that started it, and the value compared against it lives in the session cookie.
+
+To start the flow, the client sends a request to the auth server:
+
+```
+GET https://provider.com/authorize?client_id=abc&redirect_uri=https://myapp.com/callback&state=xyz123
+```
+
+The auth server checks `redirect_uri` here, before anything else happens: it must exactly match the URI registered for that `client_id`. A mismatch fails the request, so no login page and no code.
+
+After the user logs in and consents, the auth server redirects back to that same `redirect_uri` with the code and the unchanged `state`:
+
+```
+HTTP/1.1 302 Found
+Location: https://myapp.com/callback?code=authcode123&state=xyz123
+```
+
+2 requests happen due to a redirect, monitor via `curl -L` which will show the redirect chain.
+
+- `state` prevents login-CSRF: without it, an attacker can silently complete a login with their own account and feed the victim's browser `callback?code=ATTACKER_CODE`, binding the victim's session to the attacker's account.
+- `redirect_uri` prevents code leakage: without an exact match, an attacker could send `/authorize` with `redirect_uri=https://evil.com` and your public `client_id`, and the victim's code would arrive at the attacker's server.
+
+Code theft happens when the code ends up anywhere other than the client that requested it: a hijacked `redirect_uri`, an open redirect on the client, browser history, or proxy logs. Exact matching stops the code from being delivered to another host, but cannot stop leakage from the real callback. PKCE covers that gap: redeeming a stolen code still requires the `code_verifier`, which never left the client.
+
+Callback adds statefulness to the flow.
 
 ## Grants
 
