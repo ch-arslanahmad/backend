@@ -253,3 +253,32 @@ After the authorization code grant, a refresh token lets you mint new access tok
 > [!note]
 > Refresh isn’t one of the four ways to get a first token. It comes after one. An initial grant, usually authorization code, gives you an access token and a refresh token. Later, `grant_type=refresh_token` exchanges the refresh token for a new access token, so the session continues without a new login.
 > The spec lists `refresh_token` as a grant type value, which is why it’s called a “refresh grant”. However, it can’t start a session on its own, hence also called **maintenance grant**. It is not a replacement for the four main grants, it is a continuation of one of them.
+
+## Scopes & Consent
+
+A scope is a named permission string the client asks for, such as `pods:read` or `reports:write`, following [resource:permission] format. It describes what the token is allowed to do.
+
+For example a GET request,
+
+```
+GET /authorize?client_id=my-app&scope=pods:read&redirect_uri=...&response_type=code
+```
+
+Scopes keep access narrow. An app that only displays your pods doesn’t need permission to delete them.
+
+1. The client sends the scopes it needs in the authorization request (`scope=pods:read`).
+
+2. The authorization server shows the user what the client(app) is asking for, and the user approves or denies. This is **consent**.
+
+3. The authorization server issues an access token with the approved scopes.
+
+4. The access token carries the approved scopes in its `scope` claim.
+
+The resource server validates the scopes on every request and rejects any call that requires a scope not present in the token.
+
+A user can revoke the refresh token, which prevents further access‑token issuance and effectively invalidates the session’s access to protected resources.
+
+> [!important]
+> With the client‑credentials grant there is no user, so no consent screen appears; the scopes are defined by the client’s registration and the scopes it requests.
+
+
