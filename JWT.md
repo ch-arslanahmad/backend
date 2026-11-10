@@ -139,6 +139,16 @@ The actual flow,
 > [!note]
 > Due to JWT being self-contained, you cannot revoke a JWT before it expires. If you need to revoke a token, you must either wait it to expire or implement a revocation list on the server side, which requires state and affects the statelessness of the system.
 
+## JWT Validation
+
+JWTs are verified statelessly without querying the auth server on every request:
+
+- **Signature:** Verified against the authorization server's public keys (retrieved via JWKS endpoint). Ensures the token was not tampered with.
+- **`iss` (Issuer):** Matches the expected authorization server URL.
+- **`aud` (Audience):** Must match the resource server's identifier/API name. Prevents using a token intended for API A against API B.
+- **`exp` (Expiration Time):** Current timestamp must be before `exp`.
+- **`nbf` (Not Before):** Current timestamp must be after `nbf` (if present).
+
 ## Caution
 
 The JWT **is** the credential the API trusts. Whoever holds it can make requests as that user.
