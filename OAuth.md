@@ -16,7 +16,7 @@ For example, a third-party application needs to access your Google Drive files f
 
 - Authorization (_Authz_) is the process of deciding whether a user has permission to access a resource or perform an action. In other words, answering **what can you do**. Used in access control systems via roles (RBAC), permissions, and policies.
 
-They are separate questions: a valid token proves who you are, not what you may touch. You can be authenticated and still not authorized, a GitHub user is signed in but cannot open another user's private repository.
+They are separate questions: authenticating proves identity, while an OAuth token proves delegated authorization (what permissions were granted). You can be authenticated and still not authorized: a GitHub user is signed in but cannot open another user's private repository.
 
 Authorization does not always require authentication. A public resource is authorized for everyone, so the policy has no identity to check; protected resources need a principal, so authentication must run first there.
 
@@ -70,11 +70,11 @@ The tokens can be of different types, but the most common are:
 
 The access token is usually a [**JWT**](JWT.md) (JSON Web Token), they are self-contained, cheap to verify and distribute, but can't be revoked before they expire.
 
-Alternatively, the access or refresh token can be an opaque token, which is a random string (e.g., a UUID) that has no meaning outside the authorization server. The resource server must check with the authorization server to validate it, requires a database lookup, and is more expensive to verify, but can be revoked at any time, sessions use opaque tokens for this reason.
+Alternatively, the access or refresh token can be an opaque token, which is a random string (e.g., a UUID or high-entropy hex string) with no readable payload outside the authorization server. Like traditional cookie-based web session IDs, opaque tokens require a server-side database or cache lookup to validate. They cost more to verify on each call, but grant immediate server-side revocation: deleting or flagging the token in the database instantly invalidates it.
 
 ### ID Token (OIDC)
 
-The ID token is an OpenID Connect (OIDC) extension on top of OAuth 2.0 to authenticate the user. It is issued by the authorization server as a signed JWT and carries identity claims (`sub`, email, name, etc.).
+The ID token is an OpenID Connect (OIDC) extension on top of OAuth 2.0 to authenticate the user. It is issued by the authorization server as a signed JWT and carries identity claims (`sub`, `email`, `name`, etc.).
 
 - Client verifies it to know the user's identity, then uses the access token to act on their behalf.
 - Unlike access tokens (which can be opaque), an ID token is always a JWT.
@@ -218,17 +218,17 @@ It is no different from a normal login, and the client can impersonate the user.
 
 ### 4. Client Credentials Grant
 
-The client authenticates with its own `client_secret` and gets an access token with **no user involved** — no login, no browser, no consent screen. The token represents the client itself, not a user, so it can't carry claims like `email` or `role`.
+The client authenticates with its own `client_secret` and gets an access token with **no user involved**: no login, no browser, no consent screen. The token represents the client itself, not a user, so it can't carry claims like `email` or `role`.
 
 The authorization in this case is based on the client’s identity and its permissions decided by the authorization server, not on a user’s identity. The access token can be used to access resources or perform operations that are allowed for the client itself.
 
-This is used for server-to-server communication, for example
+This is used for server-to-server communication, for example:
 
-- An MCP server accesses external APIs without acting on behalf of a user.
+- An MCP server accessing external APIs without acting on behalf of a user
 - Backend-for-frontend (BFF) talking to a microservice
-- Backend-to-backend communication (third-party service talking to your API),
+- Backend-to-backend communication (third-party service talking to your API)
 
-For example, a MCP server can do this to get an access token to call a protected API:
+For example, an MCP server can do this to get an access token to call a protected API:
 
 ```http
 POST /token
@@ -276,10 +276,17 @@ Scopes keep access narrow. An app that only displays your pods doesn’t need pe
 
 The resource server validates the scopes on every request and rejects any call that requires a scope not present in the token.
 
-A user can revoke the refresh token, which prevents further access‑token issuance and effectively invalidates the session’s access to protected resources.
-
 > [!important]
 > With the client‑credentials grant there is no user, so no consent screen appears; the scopes are defined by the client’s registration and the scopes it requests.
+
+## 403 + insufficient_scope
+
+A `403 Forbidden` response with `error="insufficient_scope"` in the `WWW-Authenticate` header means the token is valid but doesn’t grant permission for this request. The server knows who you are (authenticated) and that your token is genuine. It’s refusing because the token lacks a scope (permission) the endpoint requires (not authorized).
+
+The fix is to obtain a token with the missing scope (step-up authorization), not to refresh the current token.
+
+> [!note]
+> Step-up authorization is a re-authorization flow, but it doesn't require a full re-login. The client sends a new authorization request that includes all required scopes: the existing ones plus the missing one. The user sees consent for the new scope. If their session with the provider is still valid, they usually won't be asked to log in again.
 
 ## Token Lifecycle & Refresh
 
@@ -328,3 +335,99 @@ To avoid this, make sure:
 - only one refresh runs at a time.
 - Other requests should wait for it to finish and then use the new access token.
 - Save the new refresh token before you use the new access token.
+
+### Preventing infinite client re-auth loops
+
+A re-auth loop occurs when a failed request triggers re-authentication that fails the same way. Bound every automatic recovery path.
+
+- **Limit retries per request.** Retry a 401 once after a successful refresh. If it fails again, return the error.
+- **Treat `invalid_grant` as terminal.** The refresh token is expired, revoked, or already rotated, so retrying cannot succeed. Clear the stored tokens and require an explicit user login. Do not fall back to silent re-auth.
+- **Serialize refreshes.** Concurrent refreshes (e.g., multiple API calls failing simultaneously) can send the same refresh token twice and trigger rotation reuse detection. Use one in-flight refresh and have other requests wait for its result, as mentioned [before](#operational-problem-with-rotation).
+- **Cap re-auth attempts.** Record failed attempts with timestamps. After a set number within a time window, stop and surface the error. Apply the same cap to step-up authorization for 403 `insufficient_scope`.
+- **Back off between attempts.** Wait longer, cool down period between each attempt after each consecutive failure.
+
+### Token Revocation (RFC 7009)
+
+The client calls the authorization server’s revocation endpoint (typically `POST /revoke`) with `application/x-www-form-urlencoded` parameters: `token` and optionally `token_type_hint` (`access_token` or `refresh_token`). Confidential clients must authenticate with their credentials, while public clients identify themselves with `client_id`.
+
+```http
+POST /revoke HTTP/1.1
+Host: auth.example.com
+Content-Type: application/x-www-form-urlencoded
+
+token=45ghiukldjahdnhzdauz&token_type_hint=refresh_token&client_id=my-app
+```
+
+Revocation mechanics depend on token type:
+
+- **Opaque tokens:** Revoked immediately. The auth server marks the token record revoked or deletes it from the database/store. Any subsequent introspection or lookup fails right away.
+- **JWTs:** Not automatically revocable. Because JWT are stateless, you instead revoke the refresh token, and a JWT access token stays valid until it expires (`exp`), unless the system implements a server-side denylist/Token revocation list (TRL) check (which sacrifices statelessness).
+- **Refresh vs access token revocation:** Revoking a refresh token stops it from minting new access tokens. However, **revoking a refresh token does not kill an already-issued JWT access token**: it remains valid on resource servers until its own expiration time (`exp`) passes. Conversely, when revoking an access token (if supported via an opaque token or server denylist), the authorization server may also revoke the corresponding refresh token linked to that grant.
+
+> [!important]
+> RFC 7009 requires the revocation endpoint to return HTTP 200 whether the token exists, is active, or was already revoked or invalid. This prevents attackers from fishing or probing whether a stolen token is active.
+
+Revoking tokens disconnects the client grant, but does not end the user's single sign-on (SSO) session at the auth server. Terminating that session requires explicit identity provider logout (e.g., OIDC RP-Initiated Logout).
+
+## Token Validation
+
+Resource servers validate incoming tokens on every protected request:
+
+### JWKS (JSON Web Key Set)
+
+In our isolated JWT authentication, we have our own secret key to sign and verify the JWT. But in a distributed system, the resource server may not have access to the secret key used by the authorization server for example in Auth0, Firebase, or AWS Cognito, here we have a JWKS endpoint.
+
+The public party exposes a public key in JSON usually at `https://auth.example.com/jwks.json`.
+
+It does the validation in the following way:
+
+1.  **Decode the Header:** First, your application decodes the token's header to identify the signing algorithm (e.g., RS256) and the Key ID (kid). The kid acts as a unique fingerprint, telling your server exactly which public key was used to sign the token.
+2.  **Fetch the JWKS:** Your application contacts the identity provider's JWKS endpoint (e.g., https://www.googleapis.com/oauth2/v3/certs) to retrieve a set of valid public keys.
+
+3.  **Select the Public Key:** JWKS can be multiple public keys it first fetches the JWKS then filters to the public key relevant as per the header.
+
+4.  **Verify the Signature:** Using the selected public key, your server performs a cryptographic check to ensure the token signature matches the header and payload. If the data inside the token was even slightly altered (tampered with) after it was issued, the signature verification will fail.
+
+5.  **Validate Standard Claims:** Even if the signature is valid, you must verify the token's metadata as per JWT validation rules, `exp` (Expiration Time), `iss` (Issuer), and `aud` (Audience) claims to ensure the token is still valid and intended for your application.
+
+> [!tip]
+> To prevent performance bottlenecks, libraries usually cache these keys, so your server doesn't have to make a network request for every single incoming token.
+
+The document is a `keys` array; each entry carries `kty`, `kid`, `alg` and the key material (`n`, `e` for RSA, `x`, `y` for EC). The JWT header names which key signed it (`kid`, `alg`), and the resource server matches them against the set to verify the signature. Fetch over HTTPS, cache with a short TTL, and publish old + new keys overlapping during rotation so in-flight tokens stay verifiable. If the fetch fails and there's no cached copy, JWT validation fails; treat it as an auth-server outage, not as a bad token.
+
+JWKS exists only for JWT verification. Opaque tokens skip it entirely and go through the shared-store lookup or `/introspect` instead. `kid` is just an identifier for cache routing: it carries no secrecy; the publishable half of an asymmetric pair is deliberately public.
+
+### JWT Validation
+
+Learn more about JWT validation in [JWT.md](JWT.md#jwt-validation).
+
+JWT access tokens are validated locally using cached JWKS keys.
+
+### Opaque Token Validation
+
+- Verified statefully via database lookup (if the auth server and resource server share storage) or via **Token Introspection (RFC 7662)** (`POST /introspect`).
+- The introspection response returns `{ "active": true, "scope": "...", "client_id": "...", "sub": "..." }`.
+
+### Scope Validation
+
+- After validating token authenticity and lifetime, the resource server checks the token's granted scopes against the endpoint requirements.
+- Example: `DELETE /pods/123` requires `pods:write`. If the token only contains `scope="pods:read"`, the resource server returns `403 Forbidden` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
+
+## Standard OAuth Errors
+
+Two error families exist. Where the error appears depends on which endpoint originated it:
+
+- `/authorize` errors redirect back to the client's `redirect_uri` as `?error=...&error_description=...`: the user agent carries them.
+- `/token` errors return JSON + HTTP 400 (RFC 6749 §5.2).
+- Bearer-challenge errors return 401/403 with `WWW-Authenticate: Bearer error="..."` (RFC 6750).
+
+Common errors:
+
+- `invalid_request`: missing, malformed, or unknown parameter.
+- `unauthorized_client`: the client is not allowed to use this grant or authentication method.
+- `access_denied`: the resource owner (or the auth server) denied the request; the flow stops and no code is issued. This is what a Deny click returns.
+- `unsupported_response_type`: the server does not support the requested response type (e.g., `token` for implicit flow).
+- `invalid_grant`: the authorization code or refresh token is invalid, expired, revoked, or does not match `redirect_uri`. Terminal: start over at `/authorize`.
+- `invalid_client`: client authentication failed (unknown client, wrong secret or method).
+- `invalid_scope`: the requested scope is unknown, or not allowed for this client.
+- Bearer challenges (RFC 6750, not the §5.2 list): `invalid_token` / `expired_token` -> 401 (refresh or re-auth); `insufficient_scope` -> 403 (see [403 + insufficient_scope](#403--insufficient_scope)).
