@@ -218,7 +218,7 @@ It is no different from a normal login, and the client can impersonate the user.
 
 ### 4. Client Credentials Grant
 
-The client authenticates itself with its own `client_secret` (or a JWT) and then requests an access token with **no user involved**. The resulting token represents the client, not the user, it can't carry user claims like `email` or `role`. This is what machine-to-machine communication needs.
+The client authenticates with its own `client_secret` and gets an access token with **no user involved** — no login, no browser, no consent screen. The token represents the client itself, not a user, so it can't carry claims like `email` or `role`.
 
 The authorization in this case is based on the client’s identity and its permissions decided by the authorization server, not on a user’s identity. The access token can be used to access resources or perform operations that are allowed for the client itself.
 
@@ -281,4 +281,50 @@ A user can revoke the refresh token, which prevents further access‑token issua
 > [!important]
 > With the client‑credentials grant there is no user, so no consent screen appears; the scopes are defined by the client’s registration and the scopes it requests.
 
+## Token Lifecycle & Refresh
 
+When the access token expires, the client exchanges the refresh token silently:
+
+```
+POST /token HTTP/1.1
+Host: auth.example.com
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=tGzv3JOkF0XG5Qx2TlKWIA&client_id=my-spa-client
+```
+
+There is no Authorization header and no secret (as in confidential apps). The `client_id` in the body tells the server which app is asking.
+
+If valid, the server responds with a new access token and maybe a new `refresh_token` depending on the rotation policy (see below).
+
+### When the refresh token expires
+
+Server returns `invalid_grant`. The user must go through `/authorize` again.
+
+A refresh token stops working when:
+
+- Lifetime passed or idle timeout hit.
+- User revoked access or changed their password.
+- Server detected reuse of an already-used token.
+
+If a stolen refresh token is used, rotation detects it.
+
+## Rotation: replacing the refresh token
+
+- **Non-rotating:** The refresh token stays the same. Each refresh returns only a new access token, and the app keeps the original refresh token until it expires. This is simpler, but a stolen refresh token keeps working for its whole lifetime.
+
+- **Rotating:** Each refresh returns a new refresh token and invalidates the old one. The app must save the new one immediately and discard the old one.
+
+Rotation is required for most modern apps due to them being public as it has no secret to protect the refresh token so the server has to rely on rotation to limit damage if the token is stolen. If someone presents an old token that was already rotated out, the server knows a copy was stolen.
+
+It can then revoke the whole chain of tokens from that login, which forces a fresh login.
+
+### Operational Problem with Rotation
+
+Rotation has one practical trap. If your app sends two refresh requests at the same time (common when several API calls fail together), the second request uses a token that was already rotated. The server may read that as theft and revoke everything as stated (may vary by policy).
+
+To avoid this, make sure:
+
+- only one refresh runs at a time.
+- Other requests should wait for it to finish and then use the new access token.
+- Save the new refresh token before you use the new access token.
